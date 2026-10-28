@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+  echo "Usage: ask-agent <question> [type] [options] [project]"
+  echo ""
+  echo "Arguments:"
+  echo "  question : ข้อความคำถามที่ต้องการถามผู้ใช้"
+  echo "  type     : 'buttons' (มีปุ่มให้เลือก) หรือ 'text' (พิมพ์ตอบอิสระ) [default: text]"
+  echo "  options  : รายการตัวเลือกคั่นด้วยจุลภาค เช่น 'yes:อนุมัติ:Success,no:ปฏิเสธ:Danger'"
+  echo "  project  : ชื่อโปรเจกต์ (default: ตรวจจับอัตโนมัติ)"
+  echo ""
+  echo "Examples:"
+  echo "  ask-agent \"เลือกระบบ auth แบบไหนดี?\" \"buttons\" \"supabase:Supabase Auth:Primary,custom:Custom JWT:Secondary\""
+  echo "  ask-agent \"พิมพ์อธิบาย requirement เพิ่มเติม\" \"text\""
+  exit 0
+fi
+
+detect_project() {
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    basename "$(git rev-parse --show-toplevel)"
+  else
+    basename "$PWD"
+  fi
+}
+
+QUESTION="${1:-ต้องการสอบถามข้อมูลเพิ่มเติม}"
+TYPE="${2:-text}"
+RAW_OPTIONS="${3:-}"
+PROJECT="${4:-$(detect_project)}"
+CWD="$PWD"
+
+if [[ -n "$DISCORD_PROJECT" ]]; then
+  PROJECT="$DISCORD_PROJECT"
+fi
+
+JSON_PAYLOAD=$(python3 -c '
+import json, sys
+
+question = sys.argv[1]
+qtype = sys.argv[2]
+raw_options = sys.argv[3]
+project = sys.argv[4]
+cwd = sys.argv[5]
+
+options = []
+if qtype == "buttons":
+    if raw_options.strip():
+        items = raw_options.split(",")
+        for item in items:
+            parts = item.split(":")
+            oid = parts[0].strip()
+            label = parts[1].strip() if len(parts) > 1 and parts[1].strip() else oid
+            style = parts[2].strip() if len(parts) > 2 and parts[2].strip() else "Primary"
+            options.append({"id": oid, "label": label, "style": style})
+    else:
+        options = [
+            {"id": "approve", "label": "อนุมัติ (Approve)", "style": "Success"},
+            {"id": "reject", "label": "ปฏิเสธ (Reject)", "style": "Danger"}
+        ]
+
+payload = {
+    "question": question,
+    "type": qtype,
+    "options": options,
+    "project": project,
+    "cwd": cwd
+}
+print(json.dumps(payload))
+' "$QUESTION" "$TYPE" "$RAW_OPTIONS" "$PROJECT" "$CWD")
+
+RESPONSE=$(curl -s -X POST http://localhost:4321/ask \
+  -H "Content-Type: application/json" \
+  -d "$JSON_PAYLOAD")
+
+echo "$RESPONSE" | python3 -c 'import json, sys
+try:
+    data = json.load(sys.stdin) if not sys.stdin.isatty() else {}
+    print(data.get("response", ""))
+except Exception:
+    pass
+' 2>/dev/null

@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+detect_project() {
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    basename "$(git rev-parse --show-toplevel)"
+  else
+    basename "$PWD"
+  fi
+}
+
+STATUS="completed"
+MSG=""
+FILES=""
+SNIPPET=""
+PROJECT="$(detect_project)"
+CWD="$PWD"
+
+ARG1="${1:-}"
+if [[ "$ARG1" =~ ^(completed|started|progress|failed|error)$ ]]; then
+  STATUS="$ARG1"
+  if [[ "$STATUS" == "error" ]]; then STATUS="failed"; fi
+  MSG="${2:-Task update}"
+  FILES="${3:-}"
+  SNIPPET="${4:-}"
+else
+  MSG="${1:-Task finished}"
+  FILES="${2:-}"
+  SNIPPET="${3:-}"
+fi
+
+if [[ -n "$DISCORD_PROJECT" ]]; then
+  PROJECT="$DISCORD_PROJECT"
+fi
+
+JSON_PAYLOAD=$(python3 -c '
+import json, sys
+
+status = sys.argv[1]
+msg = sys.argv[2]
+files = sys.argv[3]
+snippet = sys.argv[4]
+project = sys.argv[5]
+cwd = sys.argv[6]
+
+payload = {
+    "status": status,
+    "message": msg,
+    "files": files,
+    "snippet": snippet,
+    "project": project,
+    "cwd": cwd
+}
+print(json.dumps(payload))
+' "$STATUS" "$MSG" "$FILES" "$SNIPPET" "$PROJECT" "$CWD")
+
+curl -s -X POST http://localhost:4321/report \
+  -H "Content-Type: application/json" \
+  -d "$JSON_PAYLOAD" > /dev/null 2>&1 || true
