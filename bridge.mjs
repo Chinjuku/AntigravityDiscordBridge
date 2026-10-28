@@ -12,7 +12,9 @@ import {
     TextInputStyle,
     REST,
     Routes,
-    SlashCommandBuilder
+    SlashCommandBuilder,
+    AttachmentBuilder,
+    MessageFlags
 } from 'discord.js';
 import express from 'express';
 import dotenv from 'dotenv';
@@ -284,6 +286,32 @@ async function registerSlashCommands() {
                 ),
 
             new SlashCommandBuilder()
+                .setName('review')
+                .setDescription('🔍 ตรวจสอบโค้ดและ Feature ในโปรเจกต์ (Code & Feature Review)')
+                .addStringOption(opt =>
+                    opt.setName('project')
+                        .setDescription('เลือกโฟลเดอร์โปรเจกต์ (พิมพ์เพื่อค้นหาแบบ Auto-complete)')
+                        .setRequired(true)
+                        .setAutocomplete(true)
+                )
+                .addStringOption(opt =>
+                    opt.setName('feature')
+                        .setDescription('ระบุชื่อ Feature หรือหัวข้อที่ต้องการเน้นรีวิวเป็นพิเศษ (Optional)')
+                        .setRequired(false)
+                )
+                .addStringOption(opt =>
+                    opt.setName('scope')
+                        .setDescription('ขอบเขตโค้ดที่ต้องการรีวิว')
+                        .setRequired(false)
+                        .addChoices(
+                            { name: '📝 Uncommitted Changes (โค้ดที่กำลังแก้ / git diff)', value: 'uncommitted' },
+                            { name: '🕒 Last Commit (คอมมิตล่าสุด)', value: 'last_commit' },
+                            { name: '🌿 Branch vs Main (เทียบกับ branch หลัก)', value: 'branch' },
+                            { name: '✨ All / Feature Specific (ตาม Feature ที่ระบุ)', value: 'all' }
+                        )
+                ),
+
+            new SlashCommandBuilder()
                 .setName('projects')
                 .setDescription('📁 แสดงโฟลเดอร์โปรเจกต์ทั้งหมด พร้อม Dropdown Selection'),
 
@@ -306,9 +334,8 @@ async function registerSlashCommands() {
                 )
         ].map(cmd => cmd.toJSON());
 
-        // Register Global
-        await rest.put(Routes.applicationCommands(client.user.id), { body: commands });
-        console.log('✅ Registered Slash Commands Globally');
+        // ล้าง global commands (กันคำสั่งซ้ำ) แล้วลงทะเบียนเฉพาะ guild ซึ่งอัปเดตทันที
+        await rest.put(Routes.applicationCommands(client.user.id), { body: [] });
 
         // Register in Guilds for instant access
         for (const [guildId, guild] of client.guilds.cache) {
@@ -324,7 +351,7 @@ async function registerSlashCommands() {
     }
 }
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
     console.log(`🤖 Discord Bridge ครบวงจร พร้อมทำงาน: ${client.user.tag}`);
     await registerSlashCommands();
 });
@@ -378,12 +405,23 @@ async function runAgyTask(projectName, prompt, cwd, triggerContext = null) {
         statusMsg = await channel.send({ embeds: [startEmbed] });
     }
 
+    const stopRow = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId(`btn_stop:${targetProject}`).setLabel('🛑 Stop').setStyle(ButtonStyle.Danger)
+    );
+    await statusMsg.edit({ components: [stopRow] }).catch(() => {});
+
+    // Snapshot ก่อนเริ่มงาน เพื่อให้ Revert กลับได้โดยไม่ทับงานที่ผู้ใช้แก้ค้างไว้
+    const snapshot = (await git(['stash', 'create'], targetCwd)) || (await git(['rev-parse', 'HEAD'], targetCwd));
+    const untrackedBefore = new Set((await git(['ls-files', '--others', '--exclude-standard'], targetCwd)).split('\n').filter(Boolean));
+
     recordMessageContext(statusMsg?.id, { project: targetProject, cwd: targetCwd, type: 'task' });
 
     console.log(`🚀 Starting agy task for [${targetProject}] in ${targetCwd}: "${prompt}"`);
 
     const agyBin = '/Users/chinjuku/.local/bin/agy';
-    const child = spawn(agyBin, ['--dangerously-skip-permissions', '-p', prompt], {
+    // Auto grill-me: ให้ AI ถามกลับผ่าน Discord ก่อนลงมือ ถ้า requirement กำกวม
+    const agyPrompt = `${prompt}\n\n[Bridge instruction] If any requirement above is ambiguous or has multiple reasonable interpretations, FIRST ask clarifying questions one at a time via \`ask-agent "<question>" "buttons" "<id>:<label>:<style>,..."\` (or "text"), wait for each answer, then implement. If everything is clear, proceed without asking.`;
+    const child = spawn(agyBin, ['--dangerously-skip-permissions', '-p', agyPrompt], {
         cwd: targetCwd,
         env: {
             ...process.env,
@@ -400,6 +438,9 @@ async function runAgyTask(projectName, prompt, cwd, triggerContext = null) {
         prompt,
         startTime: Date.now(),
         msgRef: statusMsg,
+        snapshot,
+        untrackedBefore,
+        cwd: targetCwd,
         markReported: () => { reportedViaHook = true; }
     });
 
@@ -411,7 +452,22 @@ async function runAgyTask(projectName, prompt, cwd, triggerContext = null) {
         stderrChunks += d.toString();
     });
 
+    // Live progress: อัปเดตการ์ดทุก 10 วิ แสดงเวลาและขั้นตอนล่าสุดจาก transcript.jsonl / stdout
+    const progressTimer = setInterval(() => {
+        const task = activeTasks.get(targetProject);
+        if (!task) return;
+        const elapsed = Math.round((Date.now() - task.startTime) / 1000);
+        const progress = getLiveProgress(task.startTime, stdoutChunks);
+        const embed = EmbedBuilder.from(startEmbed)
+            .setColor(COLORS.PROGRESS)
+            .setTitle(`⚙️ [${targetProject}] กำลังดำเนินการ (${elapsed}s)`)
+            .setDescription(`**คำสั่งที่ได้รับ:**\n> ${prompt.slice(0, 500)}\n\n🤖 **ความคืบหน้าล่าสุด (${elapsed} วินาที):**\n\`\`\`\n${progress.slice(-800)}\n\`\`\``);
+        statusMsg.edit({ embeds: [embed], components: [stopRow] }).catch(() => {});
+    }, 10000);
+
     child.on('close', async (code) => {
+        clearInterval(progressTimer);
+        statusMsg.edit({ components: [] }).catch(() => {});
         activeTasks.delete(targetProject);
         const durationSec = Math.round((Date.now() - (statusMsg?.createdTimestamp || Date.now())) / 1000);
 
@@ -428,7 +484,23 @@ async function runAgyTask(projectName, prompt, cwd, triggerContext = null) {
                     .setTimestamp()
                     .setFooter({ text: '💬 ตอบกลับ (Reply) ข้อความนี้เพื่อสั่งงานต่อได้ทันที' });
 
-                const sent = await channel.send({ embeds: [finishEmbed] });
+                // แสดงจำนวนไฟล์ที่เปลี่ยน (รวม uncommitted เดิมใน repo ด้วย)
+                const diffStat = await git(['diff', '--stat', 'HEAD'], targetCwd);
+                const components = [];
+                if (diffStat) {
+                    const lines = diffStat.split('\n');
+                    finishEmbed.addFields({ name: `📝 ${lines.at(-1).trim()}`, value: '```\n' + lines.slice(0, -1).join('\n').slice(0, 1000) + '\n```' });
+                }
+                if (snapshot) {
+                    components.push(new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('btn_keep').setLabel('✅ Keep all').setStyle(ButtonStyle.Success),
+                        new ButtonBuilder().setCustomId('btn_revert').setLabel('↩️ Revert all').setStyle(ButtonStyle.Danger)
+                    ));
+                }
+                const files = cleanOutput.length > 3500 ? [new AttachmentBuilder(Buffer.from(cleanOutput), { name: 'output.md' })] : [];
+
+                const sent = await channel.send({ embeds: [finishEmbed], components, files });
+                if (snapshot) taskSnapshots.set(sent.id, { cwd: targetCwd, snapshot, untrackedBefore });
                 recordMessageContext(sent.id, { project: targetProject, cwd: targetCwd, type: 'completed' });
             }
         } else {
@@ -446,9 +518,62 @@ async function runAgyTask(projectName, prompt, cwd, triggerContext = null) {
             const sent = await channel.send({ embeds: [failEmbed] });
             recordMessageContext(sent.id, { project: targetProject, cwd: targetCwd, type: 'failed' });
         }
+
+        // รันคิว !prompt ถัดไปอัตโนมัติ
+        const next = projectQueues[targetProject]?.shift();
+        if (next) setTimeout(() => runAgyTask(targetProject, next), 1000);
     });
 
     return true;
+}
+
+// shortcut: snapshots อยู่ในหน่วยความจำ, หาย/กด Revert ไม่ได้หลังบอทรีสตาร์ต
+const taskSnapshots = new Map();
+
+// ดึงขั้นตอนการทำงานสดจาก transcript.jsonl ของ agy เมื่อ stdout ยังถูก buffer
+function getLiveProgress(startTime, stdoutChunks) {
+    const tail = stdoutChunks.trim().slice(-600);
+    if (tail) return tail;
+    try {
+        const brainDir = path.join(os.homedir(), '.gemini/antigravity-cli/brain');
+        if (!fs.existsSync(brainDir)) return 'กำลังคิดและวางแผน...';
+        let latestFile = null, latestMtime = startTime - 5000;
+        for (const d of fs.readdirSync(brainDir)) {
+            const p = path.join(brainDir, d, '.system_generated/logs/transcript.jsonl');
+            try {
+                const st = fs.statSync(p);
+                if (st.mtimeMs > latestMtime) { latestMtime = st.mtimeMs; latestFile = p; }
+            } catch {}
+        }
+        if (!latestFile) return 'กำลังเริ่มต้น Antigravity Agent...';
+        const lines = fs.readFileSync(latestFile, 'utf-8').trim().split('\n');
+        const actions = [];
+        for (const line of lines) {
+            try {
+                const step = JSON.parse(line);
+                if (step.type !== 'PLANNER_RESPONSE') continue;
+                for (const tc of step.tool_calls || []) {
+                    const a = tc.args || {};
+                    const clean = s => String(s || '').replace(/^"|"$/g, '');
+                    const detail = clean(a.toolSummary) || (a.Path ? path.basename(clean(a.Path)) : clean(a.CommandLine).slice(0, 50));
+                    actions.push(`• [Step ${step.step_index}] ${tc.name}${detail ? `: ${detail}` : ''}`);
+                }
+            } catch {}
+        }
+        return actions.slice(-6).join('\n') || 'กำลังวิเคราะห์คำสั่งและตรวจสอบโปรเจกต์...';
+    } catch {
+        return 'กำลังประมวลผล...';
+    }
+}
+
+function git(args, cwd) {
+    return new Promise(res => {
+        const g = spawn('git', args, { cwd });
+        let out = '';
+        g.stdout.on('data', d => out += d);
+        g.on('close', code => res(code === 0 ? out.trim() : ''));
+        g.on('error', () => res(''));
+    });
 }
 
 // -------------------------------------------------------------
@@ -559,8 +684,9 @@ app.post('/report', async (req, res) => {
     registerProject(project, cwd);
     lastActiveProject = project;
 
-    if (activeTasks.has(project)) {
-        activeTasks.get(project).markReported?.();
+    const runningTask = activeTasks.get(project);
+    if (status === 'completed' && runningTask) {
+        runningTask.markReported?.();
     }
 
     try {
@@ -568,6 +694,7 @@ app.post('/report', async (req, res) => {
         if (!channel) return res.status(500).json({ error: 'ไม่พบห้อง Discord' });
 
         const embed = new EmbedBuilder().setTimestamp();
+        const components = [];
 
         switch (status) {
             case 'started':
@@ -620,11 +747,21 @@ app.post('/report', async (req, res) => {
                     });
                 }
 
+                if (runningTask?.snapshot) {
+                    components.push(new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('btn_keep').setLabel('✅ Keep all').setStyle(ButtonStyle.Success),
+                        new ButtonBuilder().setCustomId('btn_revert').setLabel('↩️ Revert all').setStyle(ButtonStyle.Danger)
+                    ));
+                }
+
                 embed.setFooter({ text: '💡 ตอบกลับ (Reply) ข้อความนี้ หรือพิมพ์ /ai เพื่อสั่งงานต่อได้ทันที' });
                 break;
         }
 
-        const sentMsg = await channel.send({ embeds: [embed] });
+        const sentMsg = await channel.send({ embeds: [embed], components });
+        if (status === 'completed' && runningTask?.snapshot) {
+            taskSnapshots.set(sentMsg.id, { cwd: runningTask.cwd, snapshot: runningTask.snapshot, untrackedBefore: runningTask.untrackedBefore });
+        }
         recordMessageContext(sentMsg.id, { project, cwd, type: status, summary: detailMessage });
 
         return res.json({ success: true });
@@ -711,6 +848,29 @@ client.on('interactionCreate', async (interaction) => {
             return;
         }
 
+        // /review project:<name> [feature:<text>] [scope:<choice>]
+        if (commandName === 'review') {
+            const project = interaction.options.getString('project');
+            const feature = interaction.options.getString('feature') || '';
+            const scope = interaction.options.getString('scope') || 'uncommitted';
+
+            let scopeDesc = 'uncommitted git changes (git status, git diff)';
+            if (scope === 'last_commit') {
+                scopeDesc = 'the most recent commit (git log -1 -p)';
+            } else if (scope === 'branch') {
+                scopeDesc = 'changes compared to main branch (git diff origin/main...HEAD or main...HEAD)';
+            } else if (scope === 'all') {
+                scopeDesc = 'all relevant files and changes for the specified feature';
+            }
+
+            const featurePart = feature ? ` Target Feature/Focus: "${feature}".` : '';
+            const prompt = `Use the review skill to perform a comprehensive code and feature review. Scope: ${scopeDesc}.${featurePart} Inspect code changes, architecture, edge cases, security, performance, and provide a structured review report with findings and verdict.`;
+
+            await interaction.deferReply();
+            await runAgyTask(project, prompt, null, interaction);
+            return;
+        }
+
         // /projects
         if (commandName === 'projects') {
             const payload = createProjectsEmbedWithMenu();
@@ -758,7 +918,7 @@ client.on('interactionCreate', async (interaction) => {
                 .addFields(
                     {
                         name: '🚀 สั่งงาน AI ผ่าน Slash Command (พิมพ์แล้วมี Auto-complete ทันที)',
-                        value: '• `/ai project:<ชื่อ> prompt:<คำสั่ง>` : สั่งงานตรงไปยังโปรเจกต์ที่เลือก\n• `/projects` : แสดงรายชื่อโฟลเดอร์ทั้งหมด พร้อม Dropdown Selection ให้กดเลือก'
+                        value: '• `/ai project:<ชื่อ> prompt:<คำสั่ง>` : สั่งงานตรงไปยังโปรเจกต์ที่เลือก\n• `/review project:<ชื่อ> [feature] [scope]` : รีวิวโค้ดและ Feature ในโปรเจกต์\n• `/projects` : แสดงรายชื่อโฟลเดอร์ทั้งหมด พร้อม Dropdown Selection ให้กดเลือก'
                     },
                     {
                         name: '💬 สั่งงานต่อเนื่องผ่านการ Reply',
@@ -860,8 +1020,41 @@ client.on('interactionCreate', async (interaction) => {
 
             await interaction.reply({
                 content: `📊 **สถานะ [${selected}]:**\n${statusText}`,
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
+            return;
+        }
+
+        // 4.2.1 ปุ่ม Stop บนการ์ดกำลังทำงาน
+        if (customId.startsWith('btn_stop:')) {
+            const target = customId.replace('btn_stop:', '');
+            const task = activeTasks.get(target);
+            if (task) {
+                try { task.process.kill('SIGTERM'); } catch (e) { console.error(e); }
+                activeTasks.delete(target);
+            }
+            await interaction.reply({ content: task ? `🛑 หยุดงาน **[${target}]** แล้ว` : `⚠️ ไม่มีงานรันอยู่ใน **[${target}]**` });
+            return;
+        }
+
+        // 4.2.2 ปุ่ม Keep / Revert การแก้ไฟล์ของ AI
+        if (customId === 'btn_keep' || customId === 'btn_revert') {
+            const snap = taskSnapshots.get(interaction.message.id);
+            if (!snap) {
+                await interaction.reply({ content: '⚠️ ไม่พบ snapshot (บอทอาจรีสตาร์ต) ใช้ Source Control ใน IDE แทน', flags: MessageFlags.Ephemeral });
+                return;
+            }
+            let note = '✅ เก็บการเปลี่ยนแปลงทั้งหมดไว้';
+            if (customId === 'btn_revert') {
+                await git(['restore', `--source=${snap.snapshot}`, '--worktree', '--', '.'], snap.cwd);
+                const untrackedNow = (await git(['ls-files', '--others', '--exclude-standard'], snap.cwd)).split('\n').filter(Boolean);
+                const created = untrackedNow.filter(f => !snap.untrackedBefore.has(f));
+                for (const f of created) fs.rmSync(path.join(snap.cwd, f), { force: true });
+                note = `↩️ Revert กลับสู่สถานะก่อนเริ่มงานแล้ว (ลบไฟล์ใหม่ ${created.length} ไฟล์)`;
+            }
+            taskSnapshots.delete(interaction.message.id);
+            await interaction.update({ components: [] });
+            await interaction.followUp({ content: `${note} — โดย <@${interaction.user.id}>` });
             return;
         }
 
@@ -894,7 +1087,7 @@ client.on('interactionCreate', async (interaction) => {
         } else {
             await interaction.reply({
                 content: '⚠️ คำขอนี้ได้รับการตอบหรือหมดเวลาไปแล้ว',
-                ephemeral: true
+                flags: MessageFlags.Ephemeral
             });
         }
         return;
@@ -909,7 +1102,6 @@ client.on('interactionCreate', async (interaction) => {
 
         await interaction.reply({
             content: `⚡ **[${project}]** รับคำสั่งเรียบร้อย กำลังเริ่มประมวลผล...`,
-            ephemeral: false
         });
 
         await runAgyTask(project, prompt, null, interaction);
@@ -1004,11 +1196,11 @@ client.on('messageCreate', async (message) => {
             .addFields(
                 {
                     name: '🚀 สั่งงาน AI ผ่าน Slash Command (พิมพ์แล้วมี Auto-complete ทันที)',
-                    value: '• `/ai project:<ชื่อ> prompt:<คำสั่ง>` : สั่งงานตรงไปยังโปรเจกต์ที่เลือก\n• `/projects` หรือ `!projects` : แสดงรายชื่อโฟลเดอร์ทั้งหมด พร้อม Dropdown Selection ให้กดเลือก'
+                    value: '• `/ai project:<ชื่อ> prompt:<คำสั่ง>` : สั่งงานตรงไปยังโปรเจกต์ที่เลือก\n• `/review project:<ชื่อ> [feature] [scope]` : รีวิวโค้ดและ Feature ในโปรเจกต์\n• `/projects` หรือ `!projects` : แสดงรายชื่อโฟลเดอร์ทั้งหมด พร้อม Dropdown Selection ให้กดเลือก'
                 },
                 {
-                    name: '💬 สั่งงานต่อเนื่องผ่านการ Reply',
-                    value: '• เพียงกด **Reply (ตอบกลับ)** ข้อความแจ้งเตือนผลงานล่าสุดของบอท เพื่อสั่งงานต่อได้ทันที!'
+                    name: '💬 สั่งงานต่อเนื่องผ่านการ Reply หรือคำสั่งย่อ',
+                    value: '• กด **Reply** ข้อความแจ้งเตือนผลงานล่าสุดเพื่อสั่งงานต่อได้ทันที\n• `!review [ชื่อโปรเจกต์] [feature]` : สั่งรีวิวโค้ดแบบย่อ'
                 },
                 {
                     name: '📊 ตรวจสอบสถานะและหยุดงาน',
@@ -1084,6 +1276,26 @@ client.on('messageCreate', async (message) => {
 
         await message.react('⚡');
         await runAgyTask(targetProject, actualPrompt, null, message);
+        return;
+    }
+
+    // 5.1 !review [<project>] <feature/focus> หรือ !review
+    if (rawContent.startsWith('!review ') || rawContent === '!review') {
+        const fullCmd = rawContent.replace(/^!review\s*/, '').trim();
+        let targetProject = lastActiveProject || 'General';
+        let feature = fullCmd;
+
+        const match = fullCmd.match(/^\[(.*?)\]\s*(.*)/);
+        if (match) {
+            targetProject = match[1];
+            feature = match[2];
+        }
+
+        const featurePart = feature ? ` Target Feature/Focus: "${feature}".` : '';
+        const prompt = `Use the review skill to perform a comprehensive code and feature review. Scope: uncommitted git changes (git status, git diff).${featurePart} Inspect code changes, architecture, edge cases, security, performance, and provide a structured review report with findings and verdict.`;
+
+        await message.react('🔍');
+        await runAgyTask(targetProject, prompt, null, message);
         return;
     }
 

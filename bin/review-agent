@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+
+# ==============================================================================
+# review-agent: Review features and modified code using Antigravity & Review Skill
+# ==============================================================================
+
+if [[ "$1" == "--help" || "$1" == "-h" ]]; then
+  echo "Usage: review-agent [feature/focus] [scope] [project]"
+  echo ""
+  echo "Arguments:"
+  echo "  feature : Feature name, keyword, or specific files to review (optional)"
+  echo "  scope   : 'uncommitted' (default), 'last_commit', 'branch', or 'all'"
+  echo "  project : Target project name or directory (default: current directory)"
+  echo ""
+  echo "Examples:"
+  echo "  review-agent                                 # Review uncommitted changes in current project"
+  echo "  review-agent \"User Authentication\"           # Review specific feature"
+  echo "  review-agent \"Payment API\" branch           # Review feature changes against main branch"
+  echo "  review-agent \"\" last_commit                 # Review the latest commit"
+  exit 0
+fi
+
+detect_project() {
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    basename "$(git rev-parse --show-toplevel)"
+  else
+    basename "$PWD"
+  fi
+}
+
+FEATURE="${1:-}"
+SCOPE="${2:-uncommitted}"
+PROJECT="${3:-$(detect_project)}"
+CWD="$PWD"
+
+if [[ -n "$DISCORD_PROJECT" ]]; then
+  PROJECT="$DISCORD_PROJECT"
+fi
+
+SCOPE_DESC="uncommitted git changes (git status, git diff)"
+case "$SCOPE" in
+  last_commit)
+    SCOPE_DESC="the most recent commit (git log -1 -p)"
+    ;;
+  branch)
+    SCOPE_DESC="changes compared to main branch (git diff origin/main...HEAD or main...HEAD)"
+    ;;
+  all|custom)
+    SCOPE_DESC="all relevant files and changes for the specified feature"
+    ;;
+esac
+
+FEATURE_DESC=""
+if [[ -n "$FEATURE" ]]; then
+  FEATURE_DESC="Target Feature / Focus: \"$FEATURE\"."
+fi
+
+PROMPT="Use the review skill to perform a comprehensive code and feature review. Scope: $SCOPE_DESC. $FEATURE_DESC Inspect code changes, architecture, edge cases, security, performance, and provide a structured review report with findings and verdict."
+
+echo "🔍 [review-agent] Project: $PROJECT | Scope: $SCOPE"
+if [[ -n "$FEATURE" ]]; then
+  echo "🎯 Feature: $FEATURE"
+fi
+echo "⏳ Invoking Antigravity Agent with review skill..."
+echo ""
+
+AGY_BIN="/Users/chinjuku/.local/bin/agy"
+if [[ ! -x "$AGY_BIN" ]]; then
+  AGY_BIN="$(which agy 2>/dev/null || echo "")"
+fi
+
+if [[ -z "$AGY_BIN" || ! -x "$AGY_BIN" ]]; then
+  echo "⚠️ 'agy' CLI not found. Falling back to git diff inspection:"
+  echo "---------------------------------------------------------"
+  git status -s
+  echo ""
+  git diff --stat
+  exit 1
+fi
+
+"$AGY_BIN" --dangerously-skip-permissions -p "$PROMPT"
+

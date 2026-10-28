@@ -88,11 +88,17 @@ const child = spawn(agyBin, ['--dangerously-skip-permissions', '-p', prompt], {
 "C:\Program Files\Git\bin\bash.exe" "%~dp0ask-agent" %*
 ```
 
-### 4.2 สร้างไฟล์ `bin\report-agent.cmd`
+### 4.2 สร้างไฟล์ `bin\report-agent.cmd` และ `bin\review-agent.cmd`
 สร้างไฟล์ `bin\report-agent.cmd` แล้ววางโค้ดนี้:
 ```bat
 @echo off
 "C:\Program Files\Git\bin\bash.exe" "%~dp0report-agent" %*
+```
+
+และสร้างไฟล์ `bin\review-agent.cmd`:
+```bat
+@echo off
+"C:\Program Files\Git\bin\bash.exe" "%~dp0review-agent" %*
 ```
 
 ### 4.3 เพิ่มโฟลเดอร์ `bin` เข้าสู่ Windows PATH

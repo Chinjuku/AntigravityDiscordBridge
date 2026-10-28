@@ -78,11 +78,12 @@ which agy
 mkdir -p ~/.local/bin
 
 # 2. ให้สิทธิ์การรัน (Executable Permission) แก่ไฟล์สคริปต์
-chmod +x bin/ask-agent bin/report-agent
+chmod +x bin/ask-agent bin/report-agent bin/review-agent
 
 # 3. คัดลอกหรือสร้าง Symlink ไปยัง ~/.local/bin
 ln -sf "$(pwd)/bin/ask-agent" ~/.local/bin/ask-agent
 ln -sf "$(pwd)/bin/report-agent" ~/.local/bin/report-agent
+ln -sf "$(pwd)/bin/review-agent" ~/.local/bin/review-agent
 ```
 
 ตรวจสอบว่า `~/.local/bin` อยู่ใน `PATH` ของ Zsh แล้วหรือยัง:

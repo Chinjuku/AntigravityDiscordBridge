@@ -18,14 +18,18 @@
 
 - 📱 **Work From Anywhere (ควบคุมผ่านมือถือ 100%)**
   ไม่ต้องนั่งเฝ้าหน้าจออีกต่อไป ลุกไปทำธุระแล้วรอรับแจ้งเตือนและกดอนุมัติงานผ่านสมาร์ตโฟนได้ทันที
-- 🔘 **Interactive Decision Buttons & Text Reply**
-  เมื่อ AI มีตัวเลือกให้ตัดสินใจ ระบบจะสร้างปุ่มกด (Buttons) บน Discord ให้คลิกเลือกได้ในสัมผัสเดียว หรือพิมพ์ Reply ตอบกลับแบบข้อความอิสระก็ได้
+- 🔘 **Interactive Decision Buttons & Smart Clarification (Auto Grill-me)**
+  เมื่อคำสั่งกำกวมหรือ AI มีตัวเลือกให้ตัดสินใจ ระบบจะสร้างปุ่มกด (Buttons) บน Discord ให้คลิกเลือกได้ในสัมผัสเดียว หรือพิมพ์ Reply ตอบกลับแบบข้อความอิสระก็ได้ก่อนลงมือทำจริง
+- ⏱️ **Live Progress Updates (ทุกๆ 10 วินาที) & One-Click Stop**
+  อัปเดตการ์ดสถานะการทำงานบน Discord อัตโนมัติทุกๆ 10 วินาที แสดงเวลาที่ผ่านไปและขั้นตอน/Tool ล่าสุดที่ AI กำลังเรียกใช้งานแบบสดๆ พร้อมปุ่ม `🛑 Stop` บนการ์ดเพื่อกดหยุดได้ทันที
+- ↩️ **Git Snapshot & One-Click Keep / Revert**
+  สำรองสถานะโค้ดก่อนเริ่มงานอัตโนมัติ เมื่อทำงานเสร็จจะสรุปสถิติไฟล์ที่แก้ไข (`git diff --stat`) แนบไฟล์ `output.md` หากผลลัพธ์ยาว และมีปุ่ม `✅ Keep all` หรือ `↩️ Revert all` ให้กดย้อนคืนโค้ดกลับสู่สถานะเดิมได้ในคลิกเดียว
 - 📊 **Real-time Task Reporting**
   รายงานทุกสถานะ (`started`, `progress`, `completed`, `failed`) ด้วย Discord Embed แยกสีชัดเจน พร้อมสรุปรายชื่อไฟล์ที่แก้ไขและ Code Snippet
-- 🔄 **Two-Way Remote Execution (Slash Commands `/ai`, Dropdown & Reply-to-Continue)**
-  สั่งงานได้หลายวิธี: พิมพ์ `/ai` พร้อมระบบ **Auto-complete ชื่อโปรเจกต์**, เลือกจาก **Dropdown Menu (`/projects`)** พร้อมฟอร์มป๊อปอัป (Modal), พิมพ์ `!ai <คำสั่ง>` หรือกด **Reply** ที่ข้อความสรุปงานของบอทเพื่อสั่งรัน `agy` ต่อในโฟลเดอร์โปรเจกต์นั้นๆ ได้ทันที
-- 📂 **Auto-Scan Multi-Project Registry & Queue**
-  สแกนหาโฟลเดอร์โปรเจกต์ทั้งหมดในเครื่องอัตโนมัติผ่าน `PROJECTS_DIR` ใน `.env` จดจำ Path ลง `projects.json` และมีระบบคิวงาน (`!prompt`) สำหรับสั่งงานล่วงหน้า
+- 🔄 **Two-Way Remote Execution (Slash Commands `/ai`, `/review`, Dropdown & Reply-to-Continue)**
+  สั่งงานได้หลายวิธี: พิมพ์ `/ai` หรือ `/review` พร้อมระบบ **Auto-complete ชื่อโปรเจกต์**, เลือกจาก **Dropdown Menu (`/projects`)** พร้อมฟอร์มป๊อปอัป (Modal), พิมพ์ `!ai` / `!review` หรือกด **Reply** ที่ข้อความสรุปงานของบอทเพื่อสั่งรัน `agy` ต่อในโฟลเดอร์โปรเจกต์นั้นๆ ได้ทันที
+- 📂 **Auto-Scan Multi-Project Registry & Auto-Queue Runner**
+  สแกนหาโฟลเดอร์โปรเจกต์ทั้งหมดในเครื่องอัตโนมัติผ่าน `PROJECTS_DIR` ใน `.env` จดจำ Path ลง `projects.json` และมีระบบคิวงาน (`!prompt`) ที่ดึงคำสั่งถัดไปมารันต่อให้อัตโนมัติเมื่อจบงานก่อนหน้า
 - 🛡️ **Automatic Fallback Guard**
   หากปิดบอทหรือไม่ได้เชื่อมต่ออินเทอร์เน็ต AI จะสลับกลับมาถามผ่านหน้าต่าง Antigravity IDE ปกติโดยอัตโนมัติ งานไม่สะดุด
 
@@ -67,7 +71,7 @@ flowchart LR
 4. ⚙️ **[04 - การตั้งค่า Rules ให้ Antigravity ทำงานอัตโนมัติ](docs/04-antigravity-rules.md)**
    การตั้งค่าไฟล์ Rule (`discord-bridge.md` และ `workflow.md`) เพื่อบังคับให้ AI ส่งคำถามและรายงานผลเข้า Discord เสมอ
 5. 📖 **[05 - คู่มือคำสั่งและการใช้งาน (Usage & Commands)](docs/05-usage-and-commands.md)**
-   รวมคำสั่งควบคุมผ่านแชท Discord ทั้ง Slash Commands (`/ai`, `/projects`, `/status`, `/stop`, `/help`), Interactive Dropdown & Modal, Text Commands (`!ai`, `!status`, `!projects`, `!stop`), วิธีใช้งาน CLI และรายละเอียด API Endpoints
+   รวมคำสั่งควบคุมผ่านแชท Discord ทั้ง Slash Commands (`/ai`, `/review`, `/projects`, `/status`, `/stop`, `/help`), Interactive Dropdown & Modal, Text Commands (`!ai`, `!review`, `!status`, `!projects`, `!stop`), วิธีใช้งาน CLI (`ask-agent`, `report-agent`, `review-agent`) และการใช้ Skill ใน Antigravity IDE
 
 ---
 
@@ -104,6 +108,10 @@ antigravity-discord-bridge/
 ├── .gitignore          # ไฟล์กำหนดรายการที่ไม่นำขึ้น GitHub (เช่น .env, node_modules, projects.json)
 ├── bin/
 │   ├── ask-agent       # CLI Script สำหรับให้ AI ส่งคำถามและรอคำตอบจาก Discord
-│   └── report-agent    # CLI Script สำหรับให้ AI ส่งรายงานสถานะ/ผลลัพธ์เข้า Discord
+│   ├── report-agent    # CLI Script สำหรับให้ AI ส่งรายงานสถานะ/ผลลัพธ์เข้า Discord
+│   └── review-agent    # CLI Script สำหรับสั่งรีวิวโค้ดและ Feature
+├── .agents/
+│   └── skills/
+│       └── review/     # Skill สำหรับการตรวจสอบโค้ดและ Feature ใน Antigravity
 └── docs/               # คู่มือการติดตั้งและการใช้งานแยกตามหัวข้อ
 ```
